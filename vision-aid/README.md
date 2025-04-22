@@ -8,6 +8,7 @@
 
 ## 🗂 Project Structure
 
+<pre lang="markdown"><code>```
 vision-aid/
 ├── backend/
 │   ├── main.py              # FastAPI backend server
@@ -22,6 +23,8 @@ vision-aid/
 ├── package.json             # Frontend dependencies
 ├── tailwind.config.js       # Tailwind configuration
 └── README.md                # Project documentation
+```</code></pre>
+
 
 ---
 
