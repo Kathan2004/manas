@@ -1,0 +1,12 @@
+{
+  "name": "vision-aid",
+  "version": "1.0.0",
+  "description": "Navigation assistant for visually impaired using object detection",
+  "scripts": {
+    "build:css": "tailwindcss -i ./src/input.css -o ./src/output.css --minify",
+    "watch:css": "tailwindcss -i ./src/input.css -o ./src/output.css --watch"
+  },
+  "dependencies": {
+    "tailwindcss": "^3.4.10"
+  }
+}
