@@ -1,4 +1,4 @@
-Got it, Lord Kathan. Here’s the fully polished README.md in pure Markdown, ready to copy and paste:
+
 
 # 👁️‍🗨️ VisionAid: Navigation Assistant for the Visually Impaired
 
