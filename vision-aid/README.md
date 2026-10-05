@@ -1,121 +1,47 @@
+# VisionAid: Navigation Assistant for the Visually Impaired
 
+VisionAid turns a phone or laptop camera into a spoken navigation aid. The browser streams frames over a WebSocket to a FastAPI backend running YOLOv8. The backend picks the object nearest the centre of view, estimates its distance with a pinhole-camera model, and the page announces it aloud, for example "chair, 1.4 metres, to your left".
 
-# 👁️‍🗨️ VisionAid: Navigation Assistant for the Visually Impaired
+```
+camera ─► index.html (getUserMedia, canvas) ──frames over /ws──► FastAPI ─► YOLOv8 ─► closest object
+   ▲                                                                                       │
+   └──────────── speechSynthesis: "<object>, <distance> m, <direction>" ◄──────── JSON ────┘
+```
 
-**VisionAid** is a web-based navigation tool designed to assist visually impaired users using real-time camera-based object detection. It identifies nearby objects, estimates their distance, and delivers audio feedback via a Python backend powered by YOLOv8 and FastAPI.
-
----
-
-## 🗂 Project Structure
-
-<pre lang="markdown"><code>```
-vision-aid/
-├── backend/
-│   ├── main.py              # FastAPI backend server
-│   ├── requirements.txt     # Python dependencies
-│   └── utils/
-│       ├── detection.py     # YOLOv8 object detection logic
-│       └── distance.py      # Distance estimation logic
-├── src/
-│   ├── input.css            # Tailwind CSS input file
-│   └── output.css           # Generated Tailwind CSS
-├── index.html               # Frontend interface
-├── package.json             # Frontend dependencies
-├── tailwind.config.js       # Tailwind configuration
-└── README.md                # Project documentation
-```</code></pre>
-
-
----
-
-## ⚙️ Setup
-
-### ✅ Prerequisites
-
-- [Node.js (v20+)](https://nodejs.org/)
-- [Python 3.8+](https://www.python.org/)
-- Smartphone with Chrome or Safari for testing
-
----
-
-## 🎨 Frontend Setup
-
-### 1. Install Dependencies
+## Run
 
 ```bash
-cd /path/to/vision-aid
-npm install
-
-2. Build Tailwind CSS
-
-npm run build:css
-
-
-
-⸻
-
-🧠 Backend Setup
-
-1. Create Virtual Environment
-
-cd backend
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-
-2. Install Dependencies
-
+cd vision-aid/backend
+python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
+uvicorn main:app --host 127.0.0.1 --port 8000
+```
 
-3. Run the Backend
+Open `http://localhost:8000`, allow camera access, and press start. The first run downloads the YOLOv8 weights automatically; weights are not stored in git.
 
-uvicorn main:app --host 0.0.0.0 --port 8000
+Phones require HTTPS for camera access. Put the server behind a TLS reverse proxy or an HTTPS tunnel; the page connects to `/ws` on whatever origin served it.
 
+## Configuration
 
+| Variable | Default | Purpose |
+|---|---|---|
+| `VISIONAID_MODEL` | `yolov8m.pt` | `yolov8n.pt` for low-power devices |
+| `VISIONAID_CONFIDENCE` | `0.6` | Minimum detection confidence |
+| `VISIONAID_FOCAL_LENGTH` | `1000` | Camera focal length in pixels; calibrate for accurate distances |
 
-⸻
+## How distance works
 
-🌐 Serve the App
+`distance = real_width * focal_length / pixel_width`, using typical widths for the 80 COCO classes YOLOv8 detects (see `OBJECT_WIDTHS` in `backend/main.py`). Accuracy depends on calibrating `VISIONAID_FOCAL_LENGTH` for your camera.
 
-Option 1: Run Local Server (Frontend Testing)
+## Tests
 
-cd /path/to/vision-aid
-npm install -g http-server
-http-server
+```bash
+pip install -r backend/requirements-dev.txt
+cd backend && pytest -q
+```
 
+## Styling
 
-
-⸻
-
-📱 How to Test
-	1.	Open http://localhost:8000 on a smartphone (Chrome/Safari).
-	2.	Grant camera permissions when prompted.
-	3.	Ensure a well-lit environment with common objects (e.g., chair, table) 1–3 meters away.
-	4.	Open the browser console (F12 → Console) to view logs.
-
-⸻
-
-📋 Requirements
-	•	Google Chrome or Safari (preferably on mobile)
-	•	Access via localhost or HTTPS for camera usage
-	•	A well-lit environment
-	•	Running backend server (uvicorn)
-
-⸻
-
-🛠 Troubleshooting
-
-Issue	Solution
-❌ No detections	Check lighting, ensure objects are 1–3m away, verify console logs.
-🛑 Backend errors	Ensure uvicorn is running and dependencies are installed.
-🔌 WebSocket issues	Confirm backend is reachable at ws://localhost:8000/ws.
-🐢 Lag	Adjust FRAME_RATE in index.html (e.g., 1000 ms for 1 FPS).
-🐞 Other errors	Share console logs and terminal output with the development team.
-
-
-
-⸻
-
-📄 License
-
-This project is licensed under the MIT License.
-
+```bash
+npm install && npm run build:css    # Tailwind -> src/output.css
+```

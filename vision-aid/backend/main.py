@@ -1,199 +1,127 @@
-from fastapi import FastAPI, WebSocket
-from fastapi.responses import HTMLResponse
+"""
+VisionAid backend: receives camera frames over a WebSocket, runs YOLOv8, and
+returns the object closest to the centre of view with an estimated distance and
+direction for spoken guidance.
+"""
+import base64
+import binascii
+import logging
+import os
+import time
+from pathlib import Path
+
 import cv2
 import numpy as np
-import base64
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.responses import HTMLResponse
 from ultralytics import YOLO
+
 from utils.detection import detect_objects
 from utils.distance import estimate_distance, get_direction
-import json
-import time
 
-app = FastAPI()
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+log = logging.getLogger("visionaid")
 
-# Load YOLOv8 medium model
-model = YOLO("yolov8m.pt")
+BASE_DIR = Path(__file__).resolve().parent
+INDEX_HTML = BASE_DIR.parent / "index.html"
 
-# Known object widths (in meters)
-object_widths = {
-    "cell phone": 0.07,
-    "laptop": 0.35,
-    "book": 0.2,
-    "playing card": 0.09,
-    "bottle": 0.06,
-    "cord": 0.05,
-    "keyboard": 0.4,
-    "person": 0.5,
-    "chair": 0.5,
-    "table": 1.0,
-    "car": 1.8,
-    "dog": 0.6,
-    "spoon": 0.2,
-    "fork": 0.2,
-    "knife": 0.2,
-    "remote": 0.2,
-    "umbrella": 0.1,
-    "wallet": 0.1,  
+# Weights are downloaded by ultralytics on first run; nothing large lives in git.
+MODEL_NAME = os.getenv("VISIONAID_MODEL", "yolov8m.pt")
+CONFIDENCE_THRESHOLD = float(os.getenv("VISIONAID_CONFIDENCE", "0.6"))
+FOCAL_LENGTH = float(os.getenv("VISIONAID_FOCAL_LENGTH", "1000"))  # pixels, calibrate per camera
+CANVAS_WIDTH, CANVAS_HEIGHT = 640, 480
+INFER_WIDTH, INFER_HEIGHT = 320, 240
+MIN_PROCESSING_INTERVAL = 0.2  # seconds between inferences per client
+MIN_BBOX_AREA = 3000  # in canvas pixels
+MAX_FRAME_BYTES = 2 * 1024 * 1024
 
-    "bag": 0.3,
-    "cup": 0.1,
-    "plate": 0.3,
-    "glasses": 0.14,
-    "watch": 0.2,
-    "headphones": 0.15,
-    "keys": 0.05,
-    "charger": 0.05,
-    "sanitizer": 0.15,
-    "mouse": 0.1,
-    "remote control": 0.2,
-    "tissue": 0.1,
-    "earphones": 0.1,
-    "power bank": 0.1,
-    "wallet": 0.1,
-    "notebook": 0.3,
-    "pencil": 0.2,
-    "pen": 0.2,
-    "calculator": 0.3,
-    "flashlight": 0.2,
-    "umbrella": 0.1,
-    "sunglasses": 0.14,
-    "headset": 0.2,
-    "camera": 0.2,
-    "tripod": 0.5,
-    "speaker": 0.3,
-    "microphone": 0.2,
-    "cable": 0.05,
-    "adapter": 0.05,
-    "extension cord": 0.2,
-    "power strip": 0.3,
-
-    "notebook": 0.3,
-    "folder": 0.3,
-    "binder": 0.3,
-    "sticky notes": 0.1,
-    "paper": 0.1,
-    "envelope": 0.2,
-    "post-it notes": 0.1,   
-    "paperclip": 0.01,
-    "stapler": 0.2,
-    "rubber band": 0.01,
-    "eraser": 0.02,
-    "highlighter": 0.2,
-    "marker": 0.2,
-    "tape": 0.02,
-    "scissors": 0.2,
-    "calculator": 0.3,
-    "glue": 0.1,
-    "ruler": 0.3,
-    "paintbrush": 0.2,
-    "palette": 0.3,
-    "canvas": 0.5,
-    "watercolor": 0.2,
-    "oil paint": 0.2,
-    "acrylic paint": 0.2,
-    "paint": 0.2,
-    "paint tube": 0.2,
-    "paint palette": 0.3,
-    "paintbrush": 0.2,
-    
-    "default": 0.5
+# Typical real-world widths (metres) for COCO classes YOLOv8 can detect.
+OBJECT_WIDTHS = {
+    "person": 0.5, "bicycle": 0.6, "car": 1.8, "motorcycle": 0.8, "bus": 2.5, "truck": 2.5,
+    "traffic light": 0.3, "fire hydrant": 0.3, "stop sign": 0.75, "bench": 1.5, "dog": 0.6,
+    "cat": 0.3, "backpack": 0.3, "umbrella": 1.0, "handbag": 0.35, "suitcase": 0.45,
+    "bottle": 0.07, "cup": 0.09, "fork": 0.03, "knife": 0.03, "spoon": 0.04, "bowl": 0.15,
+    "chair": 0.5, "couch": 2.0, "potted plant": 0.3, "bed": 1.6, "dining table": 1.2,
+    "toilet": 0.4, "tv": 1.0, "laptop": 0.35, "mouse": 0.06, "remote": 0.05,
+    "keyboard": 0.45, "cell phone": 0.07, "microwave": 0.5, "oven": 0.6, "sink": 0.6,
+    "refrigerator": 0.8, "book": 0.15, "clock": 0.3, "vase": 0.15, "scissors": 0.08,
+    "toothbrush": 0.02,
 }
+DEFAULT_WIDTH = 0.5
+DISPLAY_NAMES = {"cell phone": "mobile phone", "tv": "television", "dining table": "table"}
 
-# Class name mapping
-class_mapping = {
-    "cell phone": "mobile",
-    "playing card": "cards",
-    "bottle": "sanitizer",
-    "cord": "charger",
-    "keyboard": "keyboard"
-}
+app = FastAPI(title="VisionAid")
+model = YOLO(MODEL_NAME)
 
-# Configuration
-FOCAL_LENGTH = 1000  # Calibrated for mobile cameras
-CONFIDENCE_THRESHOLD = 0.7
-CANVAS_WIDTH = 640
-CANVAS_HEIGHT = 480
-MIN_PROCESSING_INTERVAL = 0.2  # Reduced
-MIN_BBOX_AREA = 3000
+
+def decode_frame(message: str):
+    """Decode a data-URL JPEG/PNG frame; returns None for anything malformed."""
+    if len(message) > MAX_FRAME_BYTES * 4 // 3 + 64 or "," not in message:
+        return None
+    try:
+        raw = base64.b64decode(message.split(",", 1)[1], validate=True)
+    except (binascii.Error, ValueError):
+        return None
+    frame = cv2.imdecode(np.frombuffer(raw, np.uint8), cv2.IMREAD_COLOR)
+    return frame
+
+
+def closest_object(predictions):
+    """Pick the detection nearest the centre of view and describe it."""
+    sx, sy = CANVAS_WIDTH / INFER_WIDTH, CANVAS_HEIGHT / INFER_HEIGHT
+    cx, cy = CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2
+    best, best_dist = None, float("inf")
+    for pred in predictions:
+        x, y, w, h = pred["bbox"]
+        x, y, w, h = x * sx, y * sy, w * sx, h * sy
+        if w * h < MIN_BBOX_AREA or w <= 0:
+            continue
+        d = ((x + w / 2 - cx) ** 2 + (y + h / 2 - cy) ** 2) ** 0.5
+        if d < best_dist:
+            best_dist, best = d, (pred, x, y, w, h)
+    if best is None:
+        return None
+    pred, x, y, w, h = best
+    name = pred["class"]
+    return {
+        "class": DISPLAY_NAMES.get(name, name),
+        "confidence": round(pred["confidence"], 2),
+        "distance": round(estimate_distance(w, OBJECT_WIDTHS.get(name, DEFAULT_WIDTH), FOCAL_LENGTH), 1),
+        "direction": get_direction(x + w / 2, CANVAS_WIDTH),
+        "bbox": [int(x), int(y), int(w), int(h)],
+    }
+
 
 @app.get("/")
-async def get():
-    with open("../index.html") as f:
-        html_content = f.read()
-    return HTMLResponse(content=html_content)
+async def index():
+    return HTMLResponse(INDEX_HTML.read_text(encoding="utf-8"))
+
+
+@app.get("/health")
+async def health():
+    return {"status": "ok", "model": MODEL_NAME}
+
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
-    last_processed = 0
+    last_processed = 0.0
     try:
         while True:
-            data = await websocket.receive_text()
-            current_time = time.time()
-            if current_time - last_processed < MIN_PROCESSING_INTERVAL:
+            message = await websocket.receive_text()
+            now = time.monotonic()
+            if now - last_processed < MIN_PROCESSING_INTERVAL:
                 continue
-
-            img_data = base64.b64decode(data.split(',')[1])
-            nparr = np.frombuffer(img_data, np.uint8)
-            frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-
-            frame = cv2.resize(frame, (320, 240))
-            predictions = detect_objects(model, frame, CONFIDENCE_THRESHOLD)
-
-            results = []
-            center_x, center_y = CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2
-            closest_dist = float('inf')
-            closest_pred = None
-
-            for pred in predictions:
-                x, y, width, height = pred['bbox']
-                bbox_area = width * height
-                if bbox_area < MIN_BBOX_AREA or pred['confidence'] < CONFIDENCE_THRESHOLD:
-                    print(f"Filtered out: {pred['class']}, Confidence: {pred['confidence']}, Area: {bbox_area}")
-                    continue
-
-                x *= CANVAS_WIDTH / 320
-                y *= CANVAS_HEIGHT / 240
-                width *= CANVAS_WIDTH / 320
-                height *= CANVAS_HEIGHT / 240
-
-                bbox_center_x = x + width / 2
-                bbox_center_y = y + height / 2
-                dist = ((bbox_center_x - center_x) ** 2 + (bbox_center_y - center_y) ** 2) ** 0.5
-
-                object_width = object_widths.get(pred['class'], object_widths['default'])
-                distance = estimate_distance(width, object_width, FOCAL_LENGTH)
-                print(f"Raw prediction: {pred['class']}, Confidence: {pred['confidence']}, Distance to center: {dist}, Estimated distance: {distance:.1f}m")
-
-                if dist < closest_dist:
-                    closest_dist = dist
-                    closest_pred = pred
-
-            if closest_pred:
-                x, y, width, height = closest_pred['bbox']
-                x *= CANVAS_WIDTH / 320
-                y *= CANVAS_HEIGHT / 240
-                width *= CANVAS_WIDTH / 320
-                height *= CANVAS_HEIGHT / 240
-                object_name = closest_pred['class']
-                confidence = closest_pred['confidence']
-
-                display_name = class_mapping.get(object_name, object_name)
-                object_width = object_widths.get(object_name, object_widths['default'])
-                distance = estimate_distance(width, object_width, FOCAL_LENGTH)
-                direction = get_direction(x + width / 2, CANVAS_WIDTH)
-
-                results.append({
-                    "class": display_name,
-                    "confidence": confidence,
-                    "distance": round(distance, 1),
-                    "direction": direction,
-                    "bbox": [int(x), int(y), int(width), int(height)]
-                })
-
-            await websocket.send_json({"predictions": results})
-            last_processed = current_time
-    except Exception as e:
-        print(f"WebSocket error: {e}")
-    finally:
-        await websocket.close()
+            frame = decode_frame(message)
+            if frame is None:
+                await websocket.send_json({"predictions": [], "error": "invalid frame"})
+                continue
+            frame = cv2.resize(frame, (INFER_WIDTH, INFER_HEIGHT))
+            found = closest_object(detect_objects(model, frame, CONFIDENCE_THRESHOLD))
+            await websocket.send_json({"predictions": [found] if found else []})
+            last_processed = now
+    except WebSocketDisconnect:
+        pass
+    except Exception:
+        log.exception("WebSocket handler failed")
+        await websocket.close(code=1011)

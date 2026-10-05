@@ -1,6 +1,9 @@
 def estimate_distance(pixel_width: float, real_width: float, focal_length: float) -> float:
-    # Distance = (Real Width * Focal Length) / Pixel Width
+    """Pinhole model: distance = real width * focal length / width in pixels."""
+    if pixel_width <= 0:
+        return float("inf")
     return (real_width * focal_length) / pixel_width
+
 
 def get_direction(object_center: float, canvas_width: float) -> str:
     third = canvas_width / 3

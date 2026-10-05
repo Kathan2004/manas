@@ -1,5 +1,4 @@
 from ultralytics import YOLO
-import cv2
 import numpy as np
 
 def detect_objects(model: YOLO, frame: np.ndarray, confidence_threshold: float):
