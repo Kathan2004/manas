@@ -53,7 +53,7 @@
     }
 
     function connectWebSocket() {
-      ws = new WebSocket('wss://07dc-103-133-230-22.ngrok-free.app/ws');
+      ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
       ws.onopen = () => {
         status.textContent = 'Status: Connected to backend, detecting objects...';
         speak('Connected to backend, starting object detection.');
