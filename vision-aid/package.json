@@ -7,6 +7,6 @@
     "watch:css": "tailwindcss -i ./src/input.css -o ./src/output.css --watch"
   },
   "dependencies": {
-    "tailwindcss": "^3.4.10"
+    "tailwindcss": "^4.3.3"
   }
 }
